@@ -1,0 +1,85 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Positive Mode - Weld Analysis</title>
+    <link rel="stylesheet" href="stylePositive.css"> 
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+</head>
+<body>
+
+    <div class="container">
+        <div class="header">
+            <h1>Positive Mode - Average Analysis (16×11)</h1>
+            <a href="Home.html" class="back-btn">← Back to Home</a>
+        </div>
+
+        <div class="controls">
+            <div style="display: flex; gap: 10px; align-items: center; flex-wrap: wrap;">
+                <label for="fileCountTarget" style="font-size: 12px;">Files to Average:</label>
+                <input type="number" id="fileCountTarget" value="1" min="1" style="width: 60px;">
+                
+                <input type="file" id="excelUpload" accept=".xlsx, .xls, .csv" multiple>
+                
+                <select id="dataSelector">
+                    <option value="AF">AF Value</option>
+                    <option value="Resistance">Resistance (mΩ)</option>
+                    <option value="PeakCurrent">Peak Current (KA)</option>
+                    <option value="AverageCurrent">Average Current (KA)</option>
+                    <option value="PeakVoltage">Peak Voltage (V)</option>
+                    <option value="AverageVoltage">Average Voltage (V)</option>
+                    <option value="Power">Power (KW)</option>
+                </select>
+            </div>
+            <p id="status" style="color: #64748b; font-size: 11px; margin: 5px 0;">Ready to upload</p>
+        </div>
+
+        <div class="main-layout">
+            <div class="map-section">
+                <div class="grid-container">
+                    <!-- Column Headers -->
+                    <div class="corner-label"></div>
+                    <div id="colHeaders" class="col-headers"></div>
+                    
+                    <!-- Row Labels and Grid -->
+                    <div id="rowLabels" class="row-labels"></div>
+                    <div id="mapWrapper" class="map-wrapper"></div>
+                </div>
+            </div>
+
+            <div class="legend-box">
+                <div style="display: flex;">
+                    <div class="gradient-bar"></div>
+                    <div class="legend-labels">
+                        <span id="maxLabel">MAX</span>
+                        <span>80%</span>
+                        <span>60%</span>
+                        <span>40%</span>
+                        <span>20%</span>
+                        <span id="minLabel">MIN</span>
+                    </div>
+                </div>
+                <p style="font-size: 10px; margin-top: 15px; color: #64748b;">COLOR GRADE</p>
+            </div>
+        </div>
+    </div>
+
+    <div id="tooltip" class="tooltip">
+        <div id="tooltip-text"></div>
+        <div class="chart-container" style="width: 250px; height: 150px;">
+            <canvas id="weldChart"></canvas>
+        </div>
+    </div>
+
+    <!-- STATISTICS PANEL -->
+    <div id="statsContainer" style="display: none;">
+        <div class="container">
+            <div id="statsPanel"></div>
+        </div>
+    </div>
+
+    <script src="scriptPositive.js"></script>
+</body>
+</html>

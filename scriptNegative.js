@@ -13,13 +13,34 @@ const statsPanelDiv = document.getElementById('statsPanel');
 let globalData = [];
 let myChart = null;
 let rawCombinedData = [];
-const rowLetters = ["A", "B", "C", "D", "E", "F", "G", "H", "I", "J", "K"];
+const POSITION_COLUMNS = 16;
+const POSITION_ROWS = 11;
 
-function weldPointToPosition(weldPoint) {
-    const index = weldPoint - 1;
-    const row = Math.floor(index / 16);
-    const col = index % 16;
-    return { row, col, index };
+/**
+ * Convert weld point (1-176) back to the physical position in image (4).
+ */
+function weldPointToGridPosition(weldPoint) {
+    for (let positionColumn = 1; positionColumn <= POSITION_COLUMNS; positionColumn++) {
+        for (let positionRow = 1; positionRow <= POSITION_ROWS; positionRow++) {
+            if (gridPositionToWeldPoint(positionColumn, positionRow) === weldPoint) {
+                return { positionColumn, positionRow };
+            }
+        }
+    }
+    
+    return { positionColumn: 1, positionRow: 1 };
+}
+
+/**
+ * Convert the physical position shown in image (4) to the weld point number.
+ * Position column 1 is on the right side, 16 is on the left side.
+ * Position row 1 is at the bottom, 11 is at the top.
+ */
+function gridPositionToWeldPoint(positionColumn, positionRow) {
+    const baseValue = 171 - (positionColumn - 1) * POSITION_ROWS;
+    return positionRow % 2 === 1
+        ? baseValue + ((positionRow - 1) / 2)
+        : baseValue - (positionRow / 2);
 }
 
 fileInput.addEventListener('change', async (e) => {
@@ -53,7 +74,7 @@ fileInput.addEventListener('change', async (e) => {
 
         globalData = calculateWeldAverages(combinedData);
 
-        statusText.innerText = `✅ Loaded ${files.length} file(s) | Combined ${binNumbers.length} battery(ies) | Total ${globalData.filter(d => d !== null).length} records`;
+        statusText.innerText = `✅ Loaded ${files.length} file(s) | Combined ${binNumbers.length} battery(ies) | Total ${Object.values(globalData).filter(d => d !== null).length} records`;
         renderMap();
         updateStatistics();
         statsContainer.style.display = 'block';
@@ -69,7 +90,7 @@ function calculateWeldAverages(combinedData) {
     combinedData.forEach((row) => {
         const weldPoint = parseInt(row.STATIONWELDPOINT);
         
-        if (isNaN(weldPoint) || weldPoint < 0 || weldPoint > 176) {
+        if (isNaN(weldPoint) || weldPoint < 1 || weldPoint > 176) {
             return;
         }
 
@@ -79,9 +100,9 @@ function calculateWeldAverages(combinedData) {
         positionMap[weldPoint].push(row);
     });
 
-    const averagedData = new Array(177);
+    const averagedData = {};
 
-    for (let weldPoint = 0; weldPoint <= 176; weldPoint++) {
+    for (let weldPoint = 1; weldPoint <= 176; weldPoint++) {
         const rowsAtPosition = positionMap[weldPoint] || [];
 
         if (rowsAtPosition.length === 0) {
@@ -145,7 +166,7 @@ function getColor(val, min, max) {
 }
 
 function renderMap() {
-    if (globalData.length === 0) return;
+    if (!globalData || Object.keys(globalData).length === 0) return;
     const selectedParam = selector.value;
     wrapper.innerHTML = '';
     colHeadersContainer.innerHTML = '';
@@ -168,7 +189,7 @@ function renderMap() {
     const fields = getFields(selectedParam);
 
     let allValues = [];
-    globalData.forEach(entry => {
+    Object.values(globalData).forEach(entry => {
         if (!entry) return;
         const a = parseFloat(entry[fields.field1]);
         const b = parseFloat(entry[fields.field2]);
@@ -181,25 +202,27 @@ function renderMap() {
     document.getElementById('maxLabel').innerText = allValues.length ? max.toFixed(2) : 'N/A';
     document.getElementById('minLabel').innerText = allValues.length ? min.toFixed(2) : 'N/A';
 
-    for (let col = 1; col <= 16; col++) {
+    // Position columns: left side of the image is 16, right side is 1.
+    for (let positionColumn = POSITION_COLUMNS; positionColumn >= 1; positionColumn--) {
         const header = document.createElement('div');
         header.className = 'col-header';
-        header.innerText = col;
+        header.innerText = positionColumn;
         colHeadersContainer.appendChild(header);
     }
 
-    for (let row = 0; row < 11; row++) {
+    // Position rows: top of the image is 11, bottom is 1.
+    for (let positionRow = POSITION_ROWS; positionRow >= 1; positionRow--) {
         const label = document.createElement('div');
         label.className = 'row-label';
-        label.innerText = rowLetters[row];
+        label.innerText = positionRow;
         rowLabelsContainer.appendChild(label);
     }
 
-    for (let row = 0; row < 11; row++) {
-        for (let col = 0; col < 16; col++) {
-            const weldPoint = row * 16 + col + 1;
+    // Create cells in the same visual order as image (4).
+    for (let positionRow = POSITION_ROWS; positionRow >= 1; positionRow--) {
+        for (let positionColumn = POSITION_COLUMNS; positionColumn >= 1; positionColumn--) {
+            const weldPoint = gridPositionToWeldPoint(positionColumn, positionRow);
             const entry = globalData[weldPoint];
-            const letter = rowLetters[row];
 
             const cell = document.createElement('div');
             cell.className = 'weld-cell';
@@ -225,11 +248,11 @@ function renderMap() {
                 weldSet.forEach(w => {
                     const dot = document.createElement('div');
                     dot.className = `weld weld-${w.type}`;
-                    dot.id = `weld-${letter}-${col + 1}-${w.type}`;
+                    dot.id = `weld-${positionColumn}-${positionRow}-${w.type}`;
                     dot.style.backgroundColor = getColor(w.val, min, max);
 
                     dot.onmouseover = (e) => {
-                        showEnhancedTooltip(e, w, letter, col, weldPoint, selectedParam);
+                        showEnhancedTooltip(e, w, positionColumn, positionRow, weldPoint, selectedParam);
                     };
                     
                     dot.onmousemove = (e) => {
@@ -259,7 +282,7 @@ function renderMap() {
     }
 }
 
-function showEnhancedTooltip(e, weldData, letter, col, weldPoint, selectedParam) {
+function showEnhancedTooltip(e, weldData, positionColumn, positionRow, weldPoint, selectedParam) {
     tooltip.style.opacity = 1;
     tooltip.style.position = 'fixed';
     tooltip.style.left = '50%';
@@ -285,7 +308,7 @@ function showEnhancedTooltip(e, weldData, letter, col, weldPoint, selectedParam)
         <div style="padding: 20px; height: 100%; display: flex; flex-direction: column;">
             <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 15px; border-bottom: 2px solid #dc3545; padding-bottom: 10px;">
                 <div>
-                    <h2 style="margin: 0; color: #dc3545; font-size: 24px;">Position: ${letter}${col+1} (WP: ${weldPoint}) | Weld: ${weldData.label}</h2>
+                    <h2 style="margin: 0; color: #dc3545; font-size: 24px;">Position: ${positionColumn}/${positionRow} (WP: ${weldPoint}) | Weld: ${weldData.label}</h2>
                     <p style="margin: 5px 0 0 0; color: #94a3b8; font-size: 14px;">${selectedParam} Analysis</p>
                 </div>
                 <div style="text-align: right;">
@@ -379,61 +402,6 @@ function showEnhancedTooltip(e, weldData, letter, col, weldPoint, selectedParam)
                                 const diff = context.parsed.y - mean;
                                 const sign = diff >= 0 ? '+' : '';
                                 return `Deviation: ${sign}${diff.toFixed(4)} (${sign}${((diff/mean)*100).toFixed(2)}%)`;
-                            }
-                        }
-                    },
-                    annotation: {
-                        annotations: {
-                            meanLine: {
-                                type: 'line',
-                                yMin: mean,
-                                yMax: mean,
-                                borderColor: '#ffc107',
-                                borderWidth: 3,
-                                borderDash: [10, 5],
-                                label: {
-                                    display: true,
-                                    content: `Mean: ${mean.toFixed(4)}`,
-                                    position: 'end',
-                                    backgroundColor: 'rgba(255, 193, 7, 0.9)',
-                                    color: '#000',
-                                    font: { size: 12, weight: 'bold' },
-                                    padding: 6
-                                }
-                            },
-                            upperLimit: {
-                                type: 'line',
-                                yMin: mean + stdDev,
-                                yMax: mean + stdDev,
-                                borderColor: '#fd7e14',
-                                borderWidth: 2,
-                                borderDash: [5, 5],
-                                label: {
-                                    display: true,
-                                    content: `+1σ: ${(mean + stdDev).toFixed(4)}`,
-                                    position: 'end',
-                                    backgroundColor: 'rgba(253, 126, 20, 0.8)',
-                                    color: '#fff',
-                                    font: { size: 10 },
-                                    padding: 4
-                                }
-                            },
-                            lowerLimit: {
-                                type: 'line',
-                                yMin: mean - stdDev,
-                                yMax: mean - stdDev,
-                                borderColor: '#0dcaf0',
-                                borderWidth: 2,
-                                borderDash: [5, 5],
-                                label: {
-                                    display: true,
-                                    content: `-1σ: ${(mean - stdDev).toFixed(4)}`,
-                                    position: 'end',
-                                    backgroundColor: 'rgba(13, 202, 240, 0.8)',
-                                    color: '#000',
-                                    font: { size: 10 },
-                                    padding: 4
-                                }
                             }
                         }
                     }

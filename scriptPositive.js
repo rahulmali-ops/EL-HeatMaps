@@ -13,13 +13,19 @@ const statsPanelDiv = document.getElementById('statsPanel');
 let globalData = [];
 let myChart = null;
 let rawCombinedData = [];
-const rowLetters = ["A", "B", "C", "D", "E", "F", "G", "H", "I", "J", "K"];
+const POSITION_COLUMNS = 16;
+const POSITION_ROWS = 11;
 
-function weldPointToPosition(weldPoint) {
-    const index = weldPoint - 1;
-    const row = Math.floor(index / 16);
-    const col = index % 16;
-    return { row, col, index };
+/**
+ * Convert the physical position shown in image (4) to the weld point number.
+ * Position column 1 is on the right side, 16 is on the left side.
+ * Position row 1 is at the bottom, 11 is at the top.
+ */
+function gridPositionToWeldPoint(positionColumn, positionRow) {
+    const baseValue = 171 - (positionColumn - 1) * POSITION_ROWS;
+    return positionRow % 2 === 1
+        ? baseValue + ((positionRow - 1) / 2)
+        : baseValue - (positionRow / 2);
 }
 
 fileInput.addEventListener('change', async (e) => {
@@ -27,7 +33,7 @@ fileInput.addEventListener('change', async (e) => {
     const targetCount = parseInt(targetInput.value);
 
     if (files.length !== targetCount) {
-        statusText.innerText = `❌ Error: Please upload exactly ${targetCount} files.`;
+        statusText.innerText = `❌ Error: Please upload exactly ${targetCount} files. (Selected: ${files.length})`;
         return;
     }
 
@@ -35,41 +41,84 @@ fileInput.addEventListener('change', async (e) => {
 
     try {
         const allFilesData = [];
-        for (const file of files) {
-            const data = await file.arrayBuffer();
-            const workbook = XLSX.read(data, { type: 'array' });
-            const firstSheet = workbook.Sheets[workbook.SheetNames[0]];
-            allFilesData.push(XLSX.utils.sheet_to_json(firstSheet));
+        
+        for (let fileIndex = 0; fileIndex < files.length; fileIndex++) {
+            const file = files[fileIndex];
+            console.log(`Processing file ${fileIndex + 1}: ${file.name}`);
+            
+            try {
+                const data = await file.arrayBuffer();
+                const workbook = XLSX.read(data, { type: 'array' });
+                
+                if (!workbook.SheetNames || workbook.SheetNames.length === 0) {
+                    throw new Error(`File "${file.name}" has no sheets`);
+                }
+                
+                const firstSheet = workbook.Sheets[workbook.SheetNames[0]];
+                const sheetData = XLSX.utils.sheet_to_json(firstSheet);
+                
+                if (!sheetData || sheetData.length === 0) {
+                    throw new Error(`File "${file.name}" has no data in first sheet`);
+                }
+                
+                console.log(`File ${fileIndex + 1} loaded: ${sheetData.length} rows`);
+                allFilesData.push(sheetData);
+                
+            } catch (fileError) {
+                console.error(`Error reading file ${fileIndex + 1}:`, fileError);
+                statusText.innerText = `❌ Error reading file "${file.name}": ${fileError.message}`;
+                return;
+            }
         }
 
         const combinedData = [];
-        allFilesData.forEach(fileData => {
+        allFilesData.forEach((fileData, index) => {
+            console.log(`Combining file ${index + 1}: ${fileData.length} records`);
             combinedData.push(...fileData);
         });
 
         rawCombinedData = combinedData;
+        console.log(`Total combined records: ${combinedData.length}`);
+
+        // Validate data structure
+        if (combinedData.length > 0) {
+            const firstRow = combinedData[0];
+            console.log('First row keys:', Object.keys(firstRow));
+            
+            // Check for required columns
+            const requiredColumns = ['STATIONWELDPOINT', 'STNBINNUMBER', 'STNR1PEAKCURRENT1KA'];
+            const missingColumns = requiredColumns.filter(col => !(col in firstRow));
+            
+            if (missingColumns.length > 0) {
+                throw new Error(`Missing required columns: ${missingColumns.join(', ')}`);
+            }
+        }
 
         const binNumbers = [...new Set(combinedData.map(row => row.STNBINNUMBER))];
+        console.log(`Unique batteries: ${binNumbers.length}`, binNumbers);
 
         globalData = calculateWeldAverages(combinedData);
+        console.log(`Averaged data points: ${Object.keys(globalData).filter(k => globalData[k] !== null).length}`);
 
-        statusText.innerText = `✅ Loaded ${files.length} file(s) | Combined ${binNumbers.length} battery(ies) | Total ${globalData.filter(d => d !== null).length} records`;
+        statusText.innerText = `✅ Loaded ${files.length} file(s) | Combined ${binNumbers.length} battery(ies) | Total ${Object.values(globalData).filter(d => d !== null).length} records`;
         renderMap();
         updateStatistics();
         statsContainer.style.display = 'block';
+        
     } catch (err) {
-        statusText.innerText = "❌ Error processing files. Ensure format is identical.";
-        console.error(err);
+        console.error('Error processing files:', err);
+        statusText.innerText = `❌ Error processing files: ${err.message}`;
     }
 });
 
 function calculateWeldAverages(combinedData) {
     const positionMap = {};
 
-    combinedData.forEach((row) => {
+    combinedData.forEach((row, index) => {
         const weldPoint = parseInt(row.STATIONWELDPOINT);
         
-        if (isNaN(weldPoint) || weldPoint < 0 || weldPoint > 176) {
+        if (isNaN(weldPoint) || weldPoint < 1 || weldPoint > 176) {
+            console.warn(`Row ${index}: Invalid weld point: ${row.STATIONWELDPOINT}`);
             return;
         }
 
@@ -79,9 +128,11 @@ function calculateWeldAverages(combinedData) {
         positionMap[weldPoint].push(row);
     });
 
-    const averagedData = new Array(177);
+    console.log(`Position map created with ${Object.keys(positionMap).length} unique positions`);
 
-    for (let weldPoint = 0; weldPoint <= 176; weldPoint++) {
+    const averagedData = {};
+
+    for (let weldPoint = 1; weldPoint <= 176; weldPoint++) {
         const rowsAtPosition = positionMap[weldPoint] || [];
 
         if (rowsAtPosition.length === 0) {
@@ -114,7 +165,7 @@ function calculateWeldAverages(combinedData) {
                     const val = raw !== undefined && raw !== null && raw !== "" ? parseFloat(raw) : NaN;
                     const binNumber = row.STNBINNUMBER || 'Unknown';
                     
-                    if (!Number.isNaN(val)) {
+                    if (!Number.isNaN(val) && isFinite(val)) {
                         sum += val;
                         history.push(val);
                         batteryLabels.push(binNumber);
@@ -145,7 +196,7 @@ function getColor(val, min, max) {
 }
 
 function renderMap() {
-    if (globalData.length === 0) return;
+    if (!globalData || Object.keys(globalData).length === 0) return;
     const selectedParam = selector.value;
     wrapper.innerHTML = '';
     colHeadersContainer.innerHTML = '';
@@ -168,12 +219,12 @@ function renderMap() {
     const fields = getFields(selectedParam);
 
     let allValues = [];
-    globalData.forEach(entry => {
+    Object.values(globalData).forEach(entry => {
         if (!entry) return;
         const a = parseFloat(entry[fields.field1]);
         const b = parseFloat(entry[fields.field2]);
-        if (!Number.isNaN(a) && a !== 0) allValues.push(a);
-        if (!Number.isNaN(b) && b !== 0) allValues.push(b);
+        if (!Number.isNaN(a) && isFinite(a) && a !== 0) allValues.push(a);
+        if (!Number.isNaN(b) && isFinite(b) && b !== 0) allValues.push(b);
     });
 
     const min = allValues.length ? Math.min(...allValues) : 0;
@@ -181,25 +232,27 @@ function renderMap() {
     document.getElementById('maxLabel').innerText = allValues.length ? max.toFixed(2) : 'N/A';
     document.getElementById('minLabel').innerText = allValues.length ? min.toFixed(2) : 'N/A';
 
-    for (let col = 1; col <= 16; col++) {
+    // Position columns: left side of the image is 16, right side is 1.
+    for (let positionColumn = POSITION_COLUMNS; positionColumn >= 1; positionColumn--) {
         const header = document.createElement('div');
         header.className = 'col-header';
-        header.innerText = col;
+        header.innerText = positionColumn;
         colHeadersContainer.appendChild(header);
     }
 
-    for (let row = 0; row < 11; row++) {
+    // Position rows: top of the image is 11, bottom is 1.
+    for (let positionRow = POSITION_ROWS; positionRow >= 1; positionRow--) {
         const label = document.createElement('div');
         label.className = 'row-label';
-        label.innerText = rowLetters[row];
+        label.innerText = positionRow;
         rowLabelsContainer.appendChild(label);
     }
 
-    for (let row = 0; row < 11; row++) {
-        for (let col = 0; col < 16; col++) {
-            const weldPoint = row * 16 + col + 1;
+    // Create cells in the same visual order as image (4).
+    for (let positionRow = POSITION_ROWS; positionRow >= 1; positionRow--) {
+        for (let positionColumn = POSITION_COLUMNS; positionColumn >= 1; positionColumn--) {
+            const weldPoint = gridPositionToWeldPoint(positionColumn, positionRow);
             const entry = globalData[weldPoint];
-            const letter = rowLetters[row];
 
             const cell = document.createElement('div');
             cell.className = 'weld-cell';
@@ -225,11 +278,11 @@ function renderMap() {
                 weldSet.forEach(w => {
                     const dot = document.createElement('div');
                     dot.className = `weld weld-${w.type}`;
-                    dot.id = `weld-${letter}-${col + 1}-${w.type}`;
+                    dot.id = `weld-${positionColumn}-${positionRow}-${w.type}`;
                     dot.style.backgroundColor = getColor(w.val, min, max);
 
                     dot.onmouseover = (e) => {
-                        showEnhancedTooltip(e, w, letter, col, weldPoint, selectedParam);
+                        showEnhancedTooltip(e, w, positionColumn, positionRow, weldPoint, selectedParam);
                     };
                     
                     dot.onmousemove = (e) => {
@@ -259,7 +312,7 @@ function renderMap() {
     }
 }
 
-function showEnhancedTooltip(e, weldData, letter, col, weldPoint, selectedParam) {
+function showEnhancedTooltip(e, weldData, positionColumn, positionRow, weldPoint, selectedParam) {
     tooltip.style.opacity = 1;
     tooltip.style.position = 'fixed';
     tooltip.style.left = '50%';
@@ -275,7 +328,7 @@ function showEnhancedTooltip(e, weldData, letter, col, weldPoint, selectedParam)
     const labels = Array.isArray(weldData.batteryLabels) ? weldData.batteryLabels : [];
     
     // Calculate statistics
-    const validData = hist.filter(v => !Number.isNaN(v) && v !== 0);
+    const validData = hist.filter(v => !Number.isNaN(v) && isFinite(v) && v !== 0);
     const mean = validData.length > 0 ? validData.reduce((a, b) => a + b, 0) / validData.length : 0;
     const minVal = validData.length > 0 ? Math.min(...validData) : 0;
     const maxVal = validData.length > 0 ? Math.max(...validData) : 0;
@@ -285,7 +338,7 @@ function showEnhancedTooltip(e, weldData, letter, col, weldPoint, selectedParam)
         <div style="padding: 20px; height: 100%; display: flex; flex-direction: column;">
             <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 15px; border-bottom: 2px solid #28a745; padding-bottom: 10px;">
                 <div>
-                    <h2 style="margin: 0; color: #28a745; font-size: 24px;">Position: ${letter}${col+1} (WP: ${weldPoint}) | Weld: ${weldData.label}</h2>
+                    <h2 style="margin: 0; color: #28a745; font-size: 24px;">Position: ${positionColumn}/${positionRow} (WP: ${weldPoint}) | Weld: ${weldData.label}</h2>
                     <p style="margin: 5px 0 0 0; color: #94a3b8; font-size: 14px;">${selectedParam} Analysis</p>
                 </div>
                 <div style="text-align: right;">
@@ -379,61 +432,6 @@ function showEnhancedTooltip(e, weldData, letter, col, weldPoint, selectedParam)
                                 const diff = context.parsed.y - mean;
                                 const sign = diff >= 0 ? '+' : '';
                                 return `Deviation: ${sign}${diff.toFixed(4)} (${sign}${((diff/mean)*100).toFixed(2)}%)`;
-                            }
-                        }
-                    },
-                    annotation: {
-                        annotations: {
-                            meanLine: {
-                                type: 'line',
-                                yMin: mean,
-                                yMax: mean,
-                                borderColor: '#ffc107',
-                                borderWidth: 3,
-                                borderDash: [10, 5],
-                                label: {
-                                    display: true,
-                                    content: `Mean: ${mean.toFixed(4)}`,
-                                    position: 'end',
-                                    backgroundColor: 'rgba(255, 193, 7, 0.9)',
-                                    color: '#000',
-                                    font: { size: 12, weight: 'bold' },
-                                    padding: 6
-                                }
-                            },
-                            upperLimit: {
-                                type: 'line',
-                                yMin: mean + stdDev,
-                                yMax: mean + stdDev,
-                                borderColor: '#fd7e14',
-                                borderWidth: 2,
-                                borderDash: [5, 5],
-                                label: {
-                                    display: true,
-                                    content: `+1σ: ${(mean + stdDev).toFixed(4)}`,
-                                    position: 'end',
-                                    backgroundColor: 'rgba(253, 126, 20, 0.8)',
-                                    color: '#fff',
-                                    font: { size: 10 },
-                                    padding: 4
-                                }
-                            },
-                            lowerLimit: {
-                                type: 'line',
-                                yMin: mean - stdDev,
-                                yMax: mean - stdDev,
-                                borderColor: '#0dcaf0',
-                                borderWidth: 2,
-                                borderDash: [5, 5],
-                                label: {
-                                    display: true,
-                                    content: `-1σ: ${(mean - stdDev).toFixed(4)}`,
-                                    position: 'end',
-                                    backgroundColor: 'rgba(13, 202, 240, 0.8)',
-                                    color: '#000',
-                                    font: { size: 10 },
-                                    padding: 4
-                                }
                             }
                         }
                     }
@@ -540,7 +538,7 @@ function extractParameterData(data, param) {
     data.forEach(row => {
         fields.forEach(field => {
             const val = parseFloat(row[field]);
-            if (!Number.isNaN(val) && val !== 0) {
+            if (!Number.isNaN(val) && isFinite(val) && val !== 0) {
                 values.push(val);
             }
         });

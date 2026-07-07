@@ -146,8 +146,8 @@ body {
 
 .grid-container {
     display: grid;
-    grid-template-columns: 40px 1fr;
-    grid-template-rows: 30px 1fr;
+    grid-template-columns: 40px minmax(900px, 1fr);
+    grid-template-rows: 30px minmax(620px, auto);
     gap: 0;
 }
 
@@ -182,8 +182,8 @@ body {
 }
 
 .row-labels {
-    display: flex;
-    flex-direction: column;
+    display: grid;
+    grid-template-rows: repeat(11, 1fr);
     gap: var(--cell-spacing);
     background: #334155;
     border: 1px solid #475569;

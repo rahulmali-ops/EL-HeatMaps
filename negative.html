@@ -7,6 +7,7 @@
     <link rel="stylesheet" href="styleNegative.css"> 
     <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
 </head>
 <body>
 
@@ -32,6 +33,10 @@
                     <option value="AverageVoltage">Average Voltage (V)</option>
                     <option value="Power">Power (KW)</option>
                 </select>
+
+                <button type="button" id="downloadPdfBtn" class="pdf-btn" disabled>
+                    Download All Graphs PDF
+                </button>
             </div>
             <p id="status" style="color: #64748b; font-size: 11px; margin: 5px 0;">Ready to upload</p>
         </div>

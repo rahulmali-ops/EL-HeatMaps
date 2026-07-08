@@ -9,18 +9,16 @@ const statusText = document.getElementById('status');
 const targetInput = document.getElementById('fileCountTarget');
 const statsContainer = document.getElementById('statsContainer');
 const statsPanelDiv = document.getElementById('statsPanel');
+const pdfButton = document.getElementById('downloadPdfBtn');
 
 let globalData = [];
 let myChart = null;
 let rawCombinedData = [];
 const POSITION_COLUMNS = 16;
 const POSITION_ROWS = 11;
+const MODE_NAME = 'Positive';
+const MODE_COLOR = '#28a745';
 
-/**
- * Convert the physical position shown in image (4) to the weld point number.
- * Position column 1 is on the right side, 16 is on the left side.
- * Position row 1 is at the bottom, 11 is at the top.
- */
 function gridPositionToWeldPoint(positionColumn, positionRow) {
     const baseValue = 171 - (positionColumn - 1) * POSITION_ROWS;
     return positionRow % 2 === 1
@@ -28,12 +26,27 @@ function gridPositionToWeldPoint(positionColumn, positionRow) {
         : baseValue - (positionRow / 2);
 }
 
+function getFields(param) {
+    const map = {
+        'PeakCurrent': { field1: 'STNR1PEAKCURRENT1KA', field2: 'STNR1PEAKCURRENT2KA' },
+        'AverageCurrent': { field1: 'STNR1AVERAGECURRENT1KA', field2: 'STNR1AVERAGECURRENT2KA' },
+        'PeakVoltage': { field1: 'STNR1PEAKVOLTAGE1V', field2: 'STNR1PEAKVOLTAGE2V' },
+        'AverageVoltage': { field1: 'STNR1AVERAGEVOLTAGE1KA', field2: 'STNR1AVERAGEVOLTAGE2KA' },
+        'Power': { field1: 'STNR1POWER1KW', field2: 'STNR1POWER2KW' },
+        'Resistance': { field1: 'STNR1RESISTANCE1mohms', field2: 'STNR1RESISTANCE2mohms' },
+        'AF': { field1: 'STNLOADVALUEAFTERFORCER1CELL1', field2: 'STNLOADVALUEAFTERFORCER1CELL2' },
+        'BF': { field1: 'STNLOADVALUEBEFOREFORCER1CELL1', field2: 'STNLOADVALUEBEFOREFORCER1CELL2' }
+    };
+    return map[param];
+}
+
 fileInput.addEventListener('change', async (e) => {
     const files = Array.from(e.target.files);
     const targetCount = parseInt(targetInput.value);
 
     if (files.length !== targetCount) {
-        statusText.innerText = `❌ Error: Please upload exactly ${targetCount} files. (Selected: ${files.length})`;
+        if (pdfButton) pdfButton.disabled = true;
+        statusText.innerText = `❌ Error: Please upload exactly ${targetCount} files.`;
         return;
     }
 
@@ -41,84 +54,43 @@ fileInput.addEventListener('change', async (e) => {
 
     try {
         const allFilesData = [];
-        
-        for (let fileIndex = 0; fileIndex < files.length; fileIndex++) {
-            const file = files[fileIndex];
-            console.log(`Processing file ${fileIndex + 1}: ${file.name}`);
-            
-            try {
-                const data = await file.arrayBuffer();
-                const workbook = XLSX.read(data, { type: 'array' });
-                
-                if (!workbook.SheetNames || workbook.SheetNames.length === 0) {
-                    throw new Error(`File "${file.name}" has no sheets`);
-                }
-                
-                const firstSheet = workbook.Sheets[workbook.SheetNames[0]];
-                const sheetData = XLSX.utils.sheet_to_json(firstSheet);
-                
-                if (!sheetData || sheetData.length === 0) {
-                    throw new Error(`File "${file.name}" has no data in first sheet`);
-                }
-                
-                console.log(`File ${fileIndex + 1} loaded: ${sheetData.length} rows`);
-                allFilesData.push(sheetData);
-                
-            } catch (fileError) {
-                console.error(`Error reading file ${fileIndex + 1}:`, fileError);
-                statusText.innerText = `❌ Error reading file "${file.name}": ${fileError.message}`;
-                return;
-            }
+        for (const file of files) {
+            const data = await file.arrayBuffer();
+            const workbook = XLSX.read(data, { type: 'array' });
+            const firstSheet = workbook.Sheets[workbook.SheetNames[0]];
+            allFilesData.push(XLSX.utils.sheet_to_json(firstSheet));
         }
 
         const combinedData = [];
-        allFilesData.forEach((fileData, index) => {
-            console.log(`Combining file ${index + 1}: ${fileData.length} records`);
+        allFilesData.forEach(fileData => {
             combinedData.push(...fileData);
         });
 
         rawCombinedData = combinedData;
-        console.log(`Total combined records: ${combinedData.length}`);
-
-        // Validate data structure
-        if (combinedData.length > 0) {
-            const firstRow = combinedData[0];
-            console.log('First row keys:', Object.keys(firstRow));
-            
-            // Check for required columns
-            const requiredColumns = ['STATIONWELDPOINT', 'STNBINNUMBER', 'STNR1PEAKCURRENT1KA'];
-            const missingColumns = requiredColumns.filter(col => !(col in firstRow));
-            
-            if (missingColumns.length > 0) {
-                throw new Error(`Missing required columns: ${missingColumns.join(', ')}`);
-            }
-        }
 
         const binNumbers = [...new Set(combinedData.map(row => row.STNBINNUMBER))];
-        console.log(`Unique batteries: ${binNumbers.length}`, binNumbers);
 
         globalData = calculateWeldAverages(combinedData);
-        console.log(`Averaged data points: ${Object.keys(globalData).filter(k => globalData[k] !== null).length}`);
+        if (pdfButton) pdfButton.disabled = false;
 
-        statusText.innerText = `✅ Loaded ${files.length} file(s) | Combined ${binNumbers.length} battery(ies) | Total ${Object.values(globalData).filter(d => d !== null).length} records`;
+        statusText.innerText = `✅ Loaded ${files.length} file(s) | Combined ${binNumbers.length} battery(ies) | Total ${globalData.filter(d => d !== null).length} records`;
         renderMap();
         updateStatistics();
         statsContainer.style.display = 'block';
-        
     } catch (err) {
-        console.error('Error processing files:', err);
-        statusText.innerText = `❌ Error processing files: ${err.message}`;
+        if (pdfButton) pdfButton.disabled = true;
+        statusText.innerText = "❌ Error processing files. Ensure format is identical.";
+        console.error(err);
     }
 });
 
 function calculateWeldAverages(combinedData) {
     const positionMap = {};
 
-    combinedData.forEach((row, index) => {
+    combinedData.forEach((row) => {
         const weldPoint = parseInt(row.STATIONWELDPOINT);
         
         if (isNaN(weldPoint) || weldPoint < 1 || weldPoint > 176) {
-            console.warn(`Row ${index}: Invalid weld point: ${row.STATIONWELDPOINT}`);
             return;
         }
 
@@ -128,9 +100,7 @@ function calculateWeldAverages(combinedData) {
         positionMap[weldPoint].push(row);
     });
 
-    console.log(`Position map created with ${Object.keys(positionMap).length} unique positions`);
-
-    const averagedData = {};
+    const averagedData = new Array(177);
 
     for (let weldPoint = 1; weldPoint <= 176; weldPoint++) {
         const rowsAtPosition = positionMap[weldPoint] || [];
@@ -165,7 +135,7 @@ function calculateWeldAverages(combinedData) {
                     const val = raw !== undefined && raw !== null && raw !== "" ? parseFloat(raw) : NaN;
                     const binNumber = row.STNBINNUMBER || 'Unknown';
                     
-                    if (!Number.isNaN(val) && isFinite(val)) {
+                    if (!Number.isNaN(val)) {
                         sum += val;
                         history.push(val);
                         batteryLabels.push(binNumber);
@@ -196,35 +166,21 @@ function getColor(val, min, max) {
 }
 
 function renderMap() {
-    if (!globalData || Object.keys(globalData).length === 0) return;
+    if (globalData.length === 0) return;
     const selectedParam = selector.value;
     wrapper.innerHTML = '';
     colHeadersContainer.innerHTML = '';
     rowLabelsContainer.innerHTML = '';
 
-    const getFields = (param) => {
-        const map = {
-            'PeakCurrent': { field1: 'STNR1PEAKCURRENT1KA', field2: 'STNR1PEAKCURRENT2KA' },
-            'AverageCurrent': { field1: 'STNR1AVERAGECURRENT1KA', field2: 'STNR1AVERAGECURRENT2KA' },
-            'PeakVoltage': { field1: 'STNR1PEAKVOLTAGE1V', field2: 'STNR1PEAKVOLTAGE2V' },
-            'AverageVoltage': { field1: 'STNR1AVERAGEVOLTAGE1KA', field2: 'STNR1AVERAGEVOLTAGE2KA' },
-            'Power': { field1: 'STNR1POWER1KW', field2: 'STNR1POWER2KW' },
-            'Resistance': { field1: 'STNR1RESISTANCE1mohms', field2: 'STNR1RESISTANCE2mohms' },
-            'AF': { field1: 'STNLOADVALUEAFTERFORCER1CELL1', field2: 'STNLOADVALUEAFTERFORCER1CELL2' },
-            'BF': { field1: 'STNLOADVALUEBEFOREFORCER1CELL1', field2: 'STNLOADVALUEBEFOREFORCER1CELL2' }
-        };
-        return map[param];
-    };
-
     const fields = getFields(selectedParam);
 
     let allValues = [];
-    Object.values(globalData).forEach(entry => {
+    globalData.forEach(entry => {
         if (!entry) return;
         const a = parseFloat(entry[fields.field1]);
         const b = parseFloat(entry[fields.field2]);
-        if (!Number.isNaN(a) && isFinite(a) && a !== 0) allValues.push(a);
-        if (!Number.isNaN(b) && isFinite(b) && b !== 0) allValues.push(b);
+        if (!Number.isNaN(a) && a !== 0) allValues.push(a);
+        if (!Number.isNaN(b) && b !== 0) allValues.push(b);
     });
 
     const min = allValues.length ? Math.min(...allValues) : 0;
@@ -232,7 +188,6 @@ function renderMap() {
     document.getElementById('maxLabel').innerText = allValues.length ? max.toFixed(2) : 'N/A';
     document.getElementById('minLabel').innerText = allValues.length ? min.toFixed(2) : 'N/A';
 
-    // Position columns: left side of the image is 16, right side is 1.
     for (let positionColumn = POSITION_COLUMNS; positionColumn >= 1; positionColumn--) {
         const header = document.createElement('div');
         header.className = 'col-header';
@@ -240,7 +195,6 @@ function renderMap() {
         colHeadersContainer.appendChild(header);
     }
 
-    // Position rows: top of the image is 11, bottom is 1.
     for (let positionRow = POSITION_ROWS; positionRow >= 1; positionRow--) {
         const label = document.createElement('div');
         label.className = 'row-label';
@@ -248,7 +202,6 @@ function renderMap() {
         rowLabelsContainer.appendChild(label);
     }
 
-    // Create cells in the same visual order as image (4).
     for (let positionRow = POSITION_ROWS; positionRow >= 1; positionRow--) {
         for (let positionColumn = POSITION_COLUMNS; positionColumn >= 1; positionColumn--) {
             const weldPoint = gridPositionToWeldPoint(positionColumn, positionRow);
@@ -328,7 +281,7 @@ function showEnhancedTooltip(e, weldData, positionColumn, positionRow, weldPoint
     const labels = Array.isArray(weldData.batteryLabels) ? weldData.batteryLabels : [];
     
     // Calculate statistics
-    const validData = hist.filter(v => !Number.isNaN(v) && isFinite(v) && v !== 0);
+    const validData = hist.filter(v => !Number.isNaN(v) && v !== 0);
     const mean = validData.length > 0 ? validData.reduce((a, b) => a + b, 0) / validData.length : 0;
     const minVal = validData.length > 0 ? Math.min(...validData) : 0;
     const maxVal = validData.length > 0 ? Math.max(...validData) : 0;
@@ -432,6 +385,61 @@ function showEnhancedTooltip(e, weldData, positionColumn, positionRow, weldPoint
                                 const diff = context.parsed.y - mean;
                                 const sign = diff >= 0 ? '+' : '';
                                 return `Deviation: ${sign}${diff.toFixed(4)} (${sign}${((diff/mean)*100).toFixed(2)}%)`;
+                            }
+                        }
+                    },
+                    annotation: {
+                        annotations: {
+                            meanLine: {
+                                type: 'line',
+                                yMin: mean,
+                                yMax: mean,
+                                borderColor: '#ffc107',
+                                borderWidth: 3,
+                                borderDash: [10, 5],
+                                label: {
+                                    display: true,
+                                    content: `Mean: ${mean.toFixed(4)}`,
+                                    position: 'end',
+                                    backgroundColor: 'rgba(255, 193, 7, 0.9)',
+                                    color: '#000',
+                                    font: { size: 12, weight: 'bold' },
+                                    padding: 6
+                                }
+                            },
+                            upperLimit: {
+                                type: 'line',
+                                yMin: mean + stdDev,
+                                yMax: mean + stdDev,
+                                borderColor: '#fd7e14',
+                                borderWidth: 2,
+                                borderDash: [5, 5],
+                                label: {
+                                    display: true,
+                                    content: `+1σ: ${(mean + stdDev).toFixed(4)}`,
+                                    position: 'end',
+                                    backgroundColor: 'rgba(253, 126, 20, 0.8)',
+                                    color: '#fff',
+                                    font: { size: 10 },
+                                    padding: 4
+                                }
+                            },
+                            lowerLimit: {
+                                type: 'line',
+                                yMin: mean - stdDev,
+                                yMax: mean - stdDev,
+                                borderColor: '#0dcaf0',
+                                borderWidth: 2,
+                                borderDash: [5, 5],
+                                label: {
+                                    display: true,
+                                    content: `-1σ: ${(mean - stdDev).toFixed(4)}`,
+                                    position: 'end',
+                                    backgroundColor: 'rgba(13, 202, 240, 0.8)',
+                                    color: '#000',
+                                    font: { size: 10 },
+                                    padding: 4
+                                }
                             }
                         }
                     }
@@ -538,7 +546,7 @@ function extractParameterData(data, param) {
     data.forEach(row => {
         fields.forEach(field => {
             const val = parseFloat(row[field]);
-            if (!Number.isNaN(val) && isFinite(val) && val !== 0) {
+            if (!Number.isNaN(val) && val !== 0) {
                 values.push(val);
             }
         });
@@ -703,3 +711,207 @@ selector.addEventListener('change', () => {
     renderMap();
     updateStatistics();
 });
+
+if (pdfButton) {
+    pdfButton.addEventListener('click', downloadAllGraphsPdf);
+}
+
+function getPdfExportItems(selectedParam) {
+    const fields = getFields(selectedParam);
+    const items = [];
+
+    for (let positionRow = POSITION_ROWS; positionRow >= 1; positionRow--) {
+        for (let positionColumn = POSITION_COLUMNS; positionColumn >= 1; positionColumn--) {
+            const weldPoint = gridPositionToWeldPoint(positionColumn, positionRow);
+            const entry = globalData[weldPoint];
+            if (!entry) continue;
+
+            [
+                { weldLabel: 'L1', field: fields.field1 },
+                { weldLabel: 'L2', field: fields.field2 }
+            ].forEach(({ weldLabel, field }) => {
+                items.push({
+                    positionColumn,
+                    positionRow,
+                    weldPoint,
+                    weldLabel,
+                    value: parseFloat(entry[field]) || 0,
+                    history: entry[`${field}_history`] || [],
+                    batteryLabels: entry[`${field}_labels`] || []
+                });
+            });
+        }
+    }
+
+    return items;
+}
+
+function drawNoDataChart(canvas, text) {
+    const ctx = canvas.getContext('2d');
+    ctx.fillStyle = '#ffffff';
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+    ctx.fillStyle = '#64748b';
+    ctx.font = '24px Arial';
+    ctx.textAlign = 'center';
+    ctx.fillText(text, canvas.width / 2, canvas.height / 2);
+    return canvas.toDataURL('image/jpeg', 0.86);
+}
+
+async function createPdfChartImage(item, selectedParam) {
+    const canvas = document.createElement('canvas');
+    canvas.width = 800;
+    canvas.height = 360;
+
+    const pairs = item.history
+        .map((value, index) => ({
+            value: parseFloat(value),
+            label: item.batteryLabels[index] || `Battery ${index + 1}`
+        }))
+        .filter(point => Number.isFinite(point.value) && point.value !== 0);
+
+    if (pairs.length === 0) {
+        return drawNoDataChart(canvas, 'No valid history');
+    }
+
+    const chart = new Chart(canvas.getContext('2d'), {
+        type: 'line',
+        data: {
+            labels: pairs.map(point => point.label),
+            datasets: [{
+                label: selectedParam,
+                data: pairs.map(point => point.value),
+                borderColor: MODE_COLOR,
+                backgroundColor: `${MODE_COLOR}22`,
+                borderWidth: 2,
+                tension: 0.35,
+                fill: true,
+                pointRadius: 3,
+                pointBackgroundColor: MODE_COLOR
+            }]
+        },
+        options: {
+            responsive: false,
+            animation: false,
+            plugins: {
+                legend: { display: false },
+                tooltip: { enabled: false }
+            },
+            scales: {
+                x: {
+                    grid: { color: '#e2e8f0' },
+                    ticks: { color: '#475569', maxRotation: 45, minRotation: 45, font: { size: 10 } }
+                },
+                y: {
+                    grid: { color: '#e2e8f0' },
+                    ticks: { color: '#475569', font: { size: 10 } },
+                    title: { display: true, text: selectedParam, color: MODE_COLOR, font: { size: 12, weight: 'bold' } }
+                }
+            }
+        },
+        plugins: [{
+            id: 'whiteBackground',
+            beforeDraw(chartInstance) {
+                const { ctx, width, height } = chartInstance;
+                ctx.save();
+                ctx.globalCompositeOperation = 'destination-over';
+                ctx.fillStyle = '#ffffff';
+                ctx.fillRect(0, 0, width, height);
+                ctx.restore();
+            }
+        }]
+    });
+
+    chart.update();
+    await new Promise(resolve => setTimeout(resolve, 0));
+    const image = canvas.toDataURL('image/jpeg', 0.86);
+    chart.destroy();
+    return image;
+}
+
+async function downloadAllGraphsPdf() {
+    if (!globalData || globalData.length === 0 || !globalData.some(entry => entry)) {
+        statusText.innerText = 'Upload data before downloading the PDF.';
+        return;
+    }
+
+    if (!window.jspdf || !window.jspdf.jsPDF) {
+        statusText.innerText = 'PDF library is not loaded. Check your internet connection and reload.';
+        return;
+    }
+
+    const selectedParam = selector.value;
+    const items = getPdfExportItems(selectedParam);
+
+    if (items.length === 0) {
+        statusText.innerText = 'No cell point graph data available for PDF export.';
+        return;
+    }
+
+    const { jsPDF } = window.jspdf;
+    const pdf = new jsPDF({ orientation: 'landscape', unit: 'mm', format: 'a4' });
+    const pageWidth = pdf.internal.pageSize.getWidth();
+    const pageHeight = pdf.internal.pageSize.getHeight();
+    const margin = 10;
+    const gap = 8;
+    const headerHeight = 10;
+    const cardWidth = (pageWidth - margin * 2 - gap) / 2;
+    const cardHeight = (pageHeight - margin * 2 - headerHeight - gap) / 2;
+
+    const addHeader = () => {
+        pdf.setFontSize(12);
+        pdf.setTextColor(15, 23, 42);
+        pdf.text(`${MODE_NAME} Mode - ${selectedParam} Cell Point Graphs`, margin, margin + 2);
+        pdf.setFontSize(8);
+        pdf.setTextColor(100, 116, 139);
+        pdf.text(`Generated ${new Date().toLocaleString()}`, pageWidth - margin, margin + 2, { align: 'right' });
+        pdf.setDrawColor(203, 213, 225);
+        pdf.line(margin, margin + 5, pageWidth - margin, margin + 5);
+    };
+
+    pdfButton.disabled = true;
+    statusText.innerText = `Generating PDF: 0/${items.length} graphs...`;
+
+    try {
+        addHeader();
+
+        for (let index = 0; index < items.length; index++) {
+            if (index > 0 && index % 4 === 0) {
+                pdf.addPage();
+                addHeader();
+            }
+
+            const item = items[index];
+            const pageIndex = index % 4;
+            const column = pageIndex % 2;
+            const row = Math.floor(pageIndex / 2);
+            const x = margin + column * (cardWidth + gap);
+            const y = margin + headerHeight + row * (cardHeight + gap);
+            const image = await createPdfChartImage(item, selectedParam);
+
+            pdf.setDrawColor(203, 213, 225);
+            pdf.roundedRect(x, y, cardWidth, cardHeight, 2, 2);
+            pdf.setFontSize(9);
+            pdf.setTextColor(15, 23, 42);
+            pdf.text(
+                `Position ${item.positionColumn}/${item.positionRow} | WP ${item.weldPoint} | ${item.weldLabel} | Avg ${item.value.toFixed(4)}`,
+                x + 3,
+                y + 6
+            );
+            pdf.addImage(image, 'JPEG', x + 3, y + 10, cardWidth - 6, cardHeight - 14);
+
+            if ((index + 1) % 8 === 0 || index === items.length - 1) {
+                statusText.innerText = `Generating PDF: ${index + 1}/${items.length} graphs...`;
+                await new Promise(resolve => setTimeout(resolve, 0));
+            }
+        }
+
+        const safeParam = selectedParam.replace(/[^a-z0-9]+/gi, '-').toLowerCase();
+        pdf.save(`${MODE_NAME.toLowerCase()}-${safeParam}-all-cell-point-graphs.pdf`);
+        statusText.innerText = `PDF downloaded with ${items.length} graphs.`;
+    } catch (err) {
+        console.error('PDF export failed:', err);
+        statusText.innerText = `PDF export failed: ${err.message}`;
+    } finally {
+        pdfButton.disabled = false;
+    }
+}
